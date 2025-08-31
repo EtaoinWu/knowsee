@@ -1,0 +1,10 @@
+calendars:
+  - type: ical
+    url: https://pXXX-caldav.icloud.com/published/2/XXXXXXXXXXXXXXXXXXXXX
+    icloud: true
+    name: "Courses"
+    color: "#66ccff"
+  - type: ical
+    url: https://calendar.google.com/calendar/ical/example%40gmail.com/private-XXXXX/basic.ics
+    name: "Job"
+    color: "#9fe1e7"
