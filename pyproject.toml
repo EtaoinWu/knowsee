@@ -5,6 +5,7 @@ description = "A bot for displaying calendars"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
+    "aiohttp>=3.12.15",
     "icalendar>=6.3.1",
     "icalendar-compatibility>=0.1.4",
     "pyyaml>=6.0.2",
