@@ -1,11 +1,21 @@
+import datetime
+import logging
+from collections.abc import AsyncGenerator
+
 import aiohttp
 import icalendar
 import recurring_ical_events
+from beartype import beartype
+from dateutil.relativedelta import relativedelta
 
-from config import Config
-from event_trackers import EventTracker
+from config import CrawlerConfig
+from model import Calendar
+
+# Set up module-level logger
+logger = logging.getLogger(__name__)
 
 
+@beartype
 class Downloader:
     def __init__(self):
         self.session = aiohttp.ClientSession()
@@ -20,7 +30,9 @@ class Downloader:
             except IndexError:
                 encoding = "utf-8"
 
-            content = await response.text(encoding=encoding, errors="ignore")
+            content = await response.text(
+                encoding=encoding, errors="ignore"
+            )
             content = content.replace("\r", "")
 
             if fix_apple:
@@ -34,27 +46,32 @@ class Downloader:
         await self.session.close()
 
 
+@beartype
 class Crawler:
     def __init__(
         self,
-        config: Config,
-        event_trackers: list[EventTracker] = [],
+        config: CrawlerConfig,
         downloader: Downloader | None = None,
     ):
         self.config = config
-        self.event_trackers = event_trackers
         self.downloader = downloader or Downloader()
 
-    async def process_calendars(self, start_date, end_date):
-        for cal in self.config.calendars:
-            print(f"Processing calendar: {cal.name}")
+    async def process_calendars(
+        self,
+        calendar_configs: list[Calendar],
+    ) -> AsyncGenerator[icalendar.Event]:
+        today = datetime.date.today()
+        start_date = today - relativedelta(days=self.config.date_range[0])
+        end_date = today + relativedelta(days=self.config.date_range[1])
+        for cal in calendar_configs:
+            logger.info(f"Processing calendar: {cal.name}")
 
             try:
                 cal_data = await self.downloader.fetch(
                     cal.url, fix_apple=cal.icloud
                 )
             except ConnectionError as e:
-                print(f"Error fetching calendar data: {e}")
+                logger.error(f"Error fetching calendar data: {e}")
                 continue
 
             ical = icalendar.Calendar.from_ical(cal_data)
@@ -64,8 +81,7 @@ class Crawler:
                     raise ValueError(
                         f"{event.get('SUMMARY')} is not an Event"
                     )
-                for tracker in self.event_trackers:
-                    tracker.track_event(event)
+                yield event
 
     async def close(self):
         await self.downloader.close()

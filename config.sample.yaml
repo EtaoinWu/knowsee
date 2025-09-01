@@ -1,10 +1,26 @@
-calendars:
-  - type: ical
-    url: https://pXXX-caldav.icloud.com/published/2/XXXXXXXXXXXXXXXXXXXXX
-    icloud: true
-    name: "Courses"
-    color: "#66ccff"
-  - type: ical
-    url: https://calendar.google.com/calendar/ical/example%40gmail.com/private-XXXXX/basic.ics
-    name: "Job"
-    color: "#9fe1e7"
+locale: en
+
+calendar_groups:
+  main:
+    - type: ical
+      url: https://pXXX-caldav.icloud.com/published/2/XXXXXXXXXXXXXXXXXXXXX
+      icloud: true
+      name: "Courses"
+      color: "#66ccff"
+    - type: ical
+      url: https://calendar.google.com/calendar/ical/example%40gmail.com/private-XXXXX/basic.ics
+      name: "Job"
+      color: "#9fe1e7"
+
+crawler:
+  date_range: [-2, +4] # [0, 7] if you want a week including today
+  crawl_every: 300 # seconds
+  markdown:
+    date_format: "%Y-%m-%d"
+    time_format: "%H:%M"
+
+telegram:
+  api_token: ABCDEFGH
+  chat_ids:
+    - "-10012345678912"
+  welcome_message: "Hello, I am a bot"

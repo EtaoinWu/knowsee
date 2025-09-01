@@ -2,9 +2,10 @@ import abc
 import dataclasses
 import datetime
 import json
-from typing import cast
+from typing import Self, cast, override
 
 import icalendar
+from beartype import beartype
 from dateutil.relativedelta import relativedelta
 
 from config import MarkdownFormatConfig
@@ -14,17 +15,34 @@ EventType = icalendar.Event
 
 class EventTracker(abc.ABC):
     @abc.abstractmethod
-    def track_event(self, event: EventType):
-        pass
+    def track_event(self, event: EventType) -> Self:
+        ...
+
+    def track_events(self, events: list[EventType]) -> Self:
+        for event in events:
+            self = self.track_event(event)
+        return self
+
+    @abc.abstractmethod
+    def clear(self) -> Self:
+        ...
 
 
+@beartype
 class PrintTracker(EventTracker):
-    def track_event(self, event: EventType):
+    @override
+    def track_event(self, event: EventType) -> Self:
         print(
             f"{event.get('SUMMARY', '')}, at {event.get('DTSTART', '')}"
         )
+        return self
+
+    @override
+    def clear(self) -> Self:
+        return self
 
 
+@beartype
 def vdd_to_datetime(
     dt: datetime.datetime
     | datetime.date
@@ -39,6 +57,7 @@ def vdd_to_datetime(
         return None
 
 
+@beartype
 @dataclasses.dataclass
 class EventMD:
     start: datetime.datetime
@@ -47,12 +66,14 @@ class EventMD:
     allDay: bool
 
 
+@beartype
 class MDTracker(EventTracker):
     def __init__(self, cfg: MarkdownFormatConfig):
         self.events: list[EventMD] = []
         self.cfg = cfg
 
-    def track_event(self, event: EventType):
+    @override
+    def track_event(self, event: EventType) -> Self:
         dtstart = event.get("DTSTART")
         dtend = event.get("DTEND")
         title = event.get("SUMMARY", "")
@@ -84,6 +105,8 @@ class MDTracker(EventTracker):
             self.events.append(
                 EventMD(start=start, end=end, title=title, allDay=False)
             )
+
+        return self
 
     def generate_markdown(self) -> str:
         date_maps: dict[
@@ -128,3 +151,7 @@ class MDTracker(EventTracker):
 
     def generate_json(self) -> str:
         return json.dumps(self.generate_dict(), indent=2)
+
+    @override
+    def clear(self):
+        self.events.clear()
