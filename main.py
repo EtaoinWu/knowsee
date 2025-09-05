@@ -20,6 +20,7 @@ from config import Config, TelegramConfig
 from crawler import Crawler
 from db import Database
 from event_trackers import MDTracker
+from image_dl import ImageDownloader
 from typeutil import must, safe_must
 
 logging.basicConfig(
@@ -65,13 +66,16 @@ class BotManager:
         config: Config,
         db: Database,
         crawler: Crawler,
+        idl: ImageDownloader,
         bg: BackgroundTaskManager | None = None,
     ):
+        self.outer_config = config
         self.config = config.telegram
         self.calendar_groups = config.calendar_groups
         self.app: Application | None = None
         self.db = db
         self.crawler = crawler
+        self.idl = idl
         self.bg = bg or BackgroundTaskManager()
 
     async def update_message(self, chat_id: int, message: str):
@@ -160,6 +164,46 @@ class BotManager:
                 or "I'm a bot, please talk to me!"
             ),
         )
+
+    def meta_command_image(
+        self, name: str
+    ):
+        async def command_image(
+            update: Update, context: ContextTypes.DEFAULT_TYPE
+        ):
+            chat = safe_must(update.effective_chat, "update.effective_chat")
+
+            if not (
+                chat.id in self.config.chat_ids
+                or str(chat.id) in self.config.chat_ids
+            ):
+                await context.bot.send_message(
+                    chat_id=chat.id,
+                    text="You are not authorized to use this command.",
+                )
+                return
+            
+            try:
+                image_data = await self.idl.fetch(name)
+                if image_data:
+                    await context.bot.send_photo(
+                        chat_id=chat.id,
+                        photo=image_data,
+                        filename=f"{name}.jpg",
+                    )
+                else:
+                    await context.bot.send_message(
+                        chat_id=chat.id,
+                        text="Failed to fetch image.",
+                    )
+            except Exception as e:
+                logger.error(f"Error fetching image for command {name}: {e}")
+                await context.bot.send_message(
+                    chat_id=chat.id,
+                    text="An error occurred while fetching the image.",
+                )
+
+        return command_image
 
     async def command_add_calendar_group(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE
@@ -251,6 +295,12 @@ class BotManager:
                 ),
             ]
         )
+        self.app.add_handlers(
+            [
+                CommandHandler(name, self.meta_command_image(name))
+                for name in self.outer_config.image_urls.keys()
+            ]
+        )
 
     async def start(self):
         await self.db.connect()
@@ -296,8 +346,9 @@ async def main():
 
     db = Database(config.db_path)
     crawler = Crawler(config.crawler)
+    idl = ImageDownloader(config.image_urls)
 
-    telegram = BotManager(config, db, crawler)
+    telegram = BotManager(config, db, crawler, idl)
     telegram.prepare()
 
     # Signal handling for graceful shutdown
@@ -319,6 +370,7 @@ async def main():
     print("Shutting down...")
 
     await telegram.stop()
+    await idl.close()
 
 
 if __name__ == "__main__":

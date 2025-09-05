@@ -24,3 +24,7 @@ telegram:
   chat_ids:
     - "-10012345678912"
   welcome_message: "Hello, I am a bot"
+
+image_urls:
+  image1: https://domain.tld/path/to/image.jpg
+  

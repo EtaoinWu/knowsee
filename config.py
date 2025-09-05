@@ -60,6 +60,7 @@ class Config:
     calendar_groups: dict[str, list[Calendar]]
     crawler: CrawlerConfig
     telegram: TelegramConfig
+    image_urls: dict[str, str] = dataclasses.field(default_factory=dict)
 
 
     @classmethod
@@ -71,6 +72,7 @@ class Config:
             group_name: [Calendar.from_dict(item) for item in group]
             for group_name, group in data.get("calendar_groups", {}).items()
         }
+        image_urls = data.get("image_urls", {})
         # Support both old and new config.yaml structures
         if "crawler" in data:
             crawler = CrawlerConfig.from_dict(data["crawler"])
@@ -86,7 +88,8 @@ class Config:
             db_path=db_path,
             calendar_groups=calendar_groups,
             crawler=crawler,
-            telegram=telegram
+            telegram=telegram,
+            image_urls=image_urls,
         )
 
     @classmethod
