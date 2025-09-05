@@ -346,7 +346,7 @@ async def main():
 
     db = Database(config.db_path)
     crawler = Crawler(config.crawler)
-    idl = ImageDownloader(config.image_urls)
+    idl = ImageDownloader(config.image_urls, tcp_config={"verify_ssl": False})
 
     telegram = BotManager(config, db, crawler, idl)
     telegram.prepare()

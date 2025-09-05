@@ -9,8 +9,9 @@ logger = logging.getLogger(__name__)
 
 @beartype
 class ImageDownloader:
-    def __init__(self, image_urls: dict[str, str]):
-        self.session = aiohttp.ClientSession()
+    def __init__(self, image_urls: dict[str, str], tcp_config: dict | None = None):
+        self.connector = aiohttp.TCPConnector(**(tcp_config or {}))
+        self.session = aiohttp.ClientSession(connector=self.connector)
         self.image_urls = image_urls
 
     async def fetch(self, name: str):
