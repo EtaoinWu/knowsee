@@ -39,11 +39,11 @@ class Database:
         CREATE TABLE IF NOT EXISTS calendars (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             chat_id INTEGER NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
-            type TEXT NOT NULL CHECK(type = 'ical'),
-            url TEXT NOT NULL,
+            type TEXT NOT NULL CHECK(type IN ('ical', 'vikunja')),
+            url TEXT,
             icloud BOOLEAN NOT NULL DEFAULT 0,
             name TEXT NOT NULL,
-            color TEXT NOT NULL,
+            color TEXT,
             UNIQUE(chat_id, name)
         );
         """)

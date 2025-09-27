@@ -1,9 +1,12 @@
+# main.py
+
 import argparse
 import asyncio
 import datetime
 import locale
 import logging
 import signal
+import zoneinfo
 
 from beartype import beartype
 from beartype.typing import Callable
@@ -16,8 +19,8 @@ from telegram.ext import (
     ContextTypes,
 )
 
-from config import Config, TelegramConfig
-from crawler import Crawler
+from config import Config
+from crawler import Crawler, Downloader, VikunjaFetcher
 from db import Database
 from event_trackers import MDTracker
 from image_dl import ImageDownloader
@@ -30,7 +33,6 @@ logging.basicConfig(
 OLD_MESSAGE_CUTOFF = datetime.timedelta(days=7)
 
 logger = logging.getLogger()
-
 logger.setLevel(logging.INFO)
 
 
@@ -54,9 +56,8 @@ async def periodic(
     interval: int | float, fn: Callable, *args, **kwargs
 ):
     while True:
-        await asyncio.gather(
-            fn(*args, **kwargs), asyncio.sleep(interval)
-        )
+        await fn(*args, **kwargs)
+        await asyncio.sleep(interval)
 
 
 @beartype
@@ -66,6 +67,7 @@ class BotManager:
         config: Config,
         db: Database,
         crawler: Crawler,
+        vikunja: VikunjaFetcher,
         idl: ImageDownloader,
         bg: BackgroundTaskManager | None = None,
     ):
@@ -75,6 +77,7 @@ class BotManager:
         self.app: Application | None = None
         self.db = db
         self.crawler = crawler
+        self.vikunja = vikunja
         self.idl = idl
         self.bg = bg or BackgroundTaskManager()
 
@@ -138,20 +141,47 @@ class BotManager:
         )
 
     async def sync_chat(self, chat_id: int):
-        calendars = await self.db.get_calendars_for_chat(chat_id)
-        tracker = MDTracker(self.crawler.config.markdown)
-        async for event in self.crawler.process_calendars(calendars):
-            tracker.track_event(event)
-        message = tracker.generate_markdown()
-        message_suffix = f"\nGenerated on {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-        await self.update_message(chat_id, message + message_suffix)
+        # Pass the configured timezone string to the tracker
+        tracker = MDTracker(
+            self.crawler.config.markdown, self.outer_config.timezone
+        )
 
+        all_calendars = await self.db.get_calendars_for_chat(chat_id)
+        ical_calendars = [cal for cal in all_calendars if cal.type == 'ical']
+        has_vikunja_source = any(cal.type == 'vikunja' for cal in all_calendars)
+
+        if ical_calendars:
+            async for event in self.crawler.process_calendars(ical_calendars):
+                tracker.track_event(event)
+
+        if has_vikunja_source:
+            logger.info(f"Vikunja source enabled for chat {chat_id}, fetching tasks.")
+            days_forward = self.crawler.config.date_range[1]
+            tasks = await self.vikunja.fetch_tasks(days_forward)
+            for task in tasks:
+                tracker.track_task(task)
+
+        message = tracker.generate_markdown()
+        if not message.strip():
+            message = "No upcoming events or tasks."
+
+        # Make the "Last updated" timestamp timezone-aware
+        try:
+            tz = zoneinfo.ZoneInfo(self.outer_config.timezone)
+        except zoneinfo.ZoneInfoNotFoundError:
+            tz = zoneinfo.ZoneInfo("UTC")
+            
+        now_str = datetime.datetime.now(tz).strftime('%Y-%m-%d %H:%M:%S %Z')
+        message_suffix = f"\n_Last updated on {now_str}_"
+        await self.update_message(chat_id, message + message_suffix)
+    
     async def sync_full(self):
         chat_ids = await self.db.list_all_chats()
         await asyncio.gather(
             *[self.sync_chat(chat_id) for chat_id in chat_ids]
         )
 
+    # ... (the rest of the command handlers remain the same)
     async def command_start(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE
     ):
@@ -165,13 +195,13 @@ class BotManager:
             ),
         )
 
-    def meta_command_image(
-        self, name: str
-    ):
+    def meta_command_image(self, name: str):
         async def command_image(
             update: Update, context: ContextTypes.DEFAULT_TYPE
         ):
-            chat = safe_must(update.effective_chat, "update.effective_chat")
+            chat = safe_must(
+                update.effective_chat, "update.effective_chat"
+            )
 
             if not (
                 chat.id in self.config.chat_ids
@@ -182,7 +212,7 @@ class BotManager:
                     text="You are not authorized to use this command.",
                 )
                 return
-            
+
             try:
                 image_data = await self.idl.fetch(name)
                 if image_data:
@@ -197,7 +227,9 @@ class BotManager:
                         text="Failed to fetch image.",
                     )
             except Exception as e:
-                logger.error(f"Error fetching image for command {name}: {e}")
+                logger.error(
+                    f"Error fetching image for command {name}: {e}"
+                )
                 await context.bot.send_message(
                     chat_id=chat.id,
                     text="An error occurred while fetching the image.",
@@ -293,6 +325,9 @@ class BotManager:
                     "add_calendar_group",
                     self.command_add_calendar_group,
                 ),
+                CommandHandler(
+                    "clear_calendars", self.command_clear_group
+                ),
             ]
         )
         self.app.add_handlers(
@@ -318,12 +353,12 @@ class BotManager:
         self.bg.cancel_tasks()
 
         app = must(self.app)
-        await must(app.updater).stop()
+        if app.updater:
+            await app.updater.stop()
         await app.stop()
         await app.shutdown()
 
         await self.db.close()
-
         await self.crawler.close()
 
 
@@ -342,16 +377,25 @@ async def main():
 
     print(f"Using config file: {args.config}")
     config = Config.from_file(args.config)
-    locale.setlocale(locale.LC_TIME, config.locale)
+    if config.locale:
+        try:
+            locale.setlocale(locale.LC_TIME, config.locale)
+        except locale.Error as e:
+            logger.error(
+                f"Could not set locale to {config.locale}: {e}"
+            )
 
     db = Database(config.db_path)
-    crawler = Crawler(config.crawler)
-    idl = ImageDownloader(config.image_urls, tcp_config={"verify_ssl": False})
+    downloader = Downloader()
+    crawler = Crawler(config.crawler, downloader)
+    vikunja = VikunjaFetcher(config.vikunja, downloader)
+    idl = ImageDownloader(
+        config.image_urls, tcp_config={"verify_ssl": False}
+    )
 
-    telegram = BotManager(config, db, crawler, idl)
+    telegram = BotManager(config, db, crawler, vikunja, idl)
     telegram.prepare()
 
-    # Signal handling for graceful shutdown
     stop_event = asyncio.Event()
 
     def handle_signal():
@@ -362,11 +406,8 @@ async def main():
         loop.add_signal_handler(sig, handle_signal)
 
     await telegram.start()
-
     print("Bot is running. Press Ctrl+C to stop.")
-
     await stop_event.wait()
-
     print("Shutting down...")
 
     await telegram.stop()

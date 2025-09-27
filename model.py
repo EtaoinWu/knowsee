@@ -1,3 +1,5 @@
+# model.py
+
 import dataclasses
 from datetime import datetime
 
@@ -14,8 +16,10 @@ class Calendar:
         color: str,
         icloud: bool | None = None,
     ):
-        if type != "ical":
+        if type not in ["ical", "vikunja"]:
             raise ValueError(f"Unsupported calendar type: {type}")
+        if type == "ical" and not url:
+            raise ValueError("ical type requires a url")
         self.type = type
         self.url = url
         self.name = name
@@ -26,9 +30,9 @@ class Calendar:
     def from_dict(cls, data: dict):
         return cls(
             type=data["type"],
-            url=data["url"],
             name=data["name"],
-            color=data["color"],
+            url=data.get("url", ""),
+            color=data.get("color", "#cccccc"),
             icloud=data.get("icloud"),
         )
 
@@ -40,3 +44,27 @@ class TrackedMsg:
     pinned: bool
     create_time: datetime
     update_time: datetime
+
+
+@beartype
+@dataclasses.dataclass
+class VikunjaTask:
+    title: str
+    due_date: str | None
+
+    @classmethod
+    def from_dict(cls, data: dict):
+        return cls(
+            title=data.get("title", "Untitled Task"),
+            due_date=data.get("due_date"),
+        )
+
+
+@beartype
+@dataclasses.dataclass
+class DisplayEvent:
+    start: datetime
+    end: datetime
+    title: str
+    all_day: bool
+    overdue: bool = False

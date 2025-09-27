@@ -1,16 +1,23 @@
+# event_trackers.py
+
 import abc
 import dataclasses
 import datetime
 import json
+import logging
+import zoneinfo
 from typing import Self, cast, override
 
 import icalendar
 from beartype import beartype
+from dateutil.parser import isoparse
 from dateutil.relativedelta import relativedelta
 
 from config import MarkdownFormatConfig
+from model import DisplayEvent, VikunjaTask
 
 EventType = icalendar.Event
+logger = logging.getLogger(__name__)
 
 
 class EventTracker(abc.ABC):
@@ -29,20 +36,6 @@ class EventTracker(abc.ABC):
 
 
 @beartype
-class PrintTracker(EventTracker):
-    @override
-    def track_event(self, event: EventType) -> Self:
-        print(
-            f"{event.get('SUMMARY', '')}, at {event.get('DTSTART', '')}"
-        )
-        return self
-
-    @override
-    def clear(self) -> Self:
-        return self
-
-
-@beartype
 def vdd_to_datetime(
     dt: datetime.datetime
     | datetime.date
@@ -58,100 +51,125 @@ def vdd_to_datetime(
 
 
 @beartype
-@dataclasses.dataclass
-class EventMD:
-    start: datetime.datetime
-    end: datetime.datetime
-    title: str
-    allDay: bool
-
-
-@beartype
 class MDTracker(EventTracker):
-    def __init__(self, cfg: MarkdownFormatConfig):
-        self.events: list[EventMD] = []
+    def __init__(self, cfg: MarkdownFormatConfig, timezone: str = "UTC"):
+        self.events: list[DisplayEvent] = []
         self.cfg = cfg
+        try:
+            self.tz = zoneinfo.ZoneInfo(timezone)
+        except zoneinfo.ZoneInfoNotFoundError:
+            logger.error(f"Timezone '{timezone}' not found. Defaulting to UTC.")
+            self.tz = zoneinfo.ZoneInfo("UTC")
+    
+    def _normalize_datetime(self, dt: datetime.datetime) -> datetime.datetime:
+        """Converts any datetime to the configured target timezone."""
+        if dt.tzinfo is None:
+            # If the datetime is naive, assume it's in the target timezone.
+            return dt.replace(tzinfo=self.tz)
+        else:
+            # If it's aware, convert it to the target timezone.
+            return dt.astimezone(self.tz)
 
     @override
     def track_event(self, event: EventType) -> Self:
         dtstart = event.get("DTSTART")
         dtend = event.get("DTEND")
-        title = event.get("SUMMARY", "")
+        title = str(event.get("SUMMARY", ""))
 
         if not isinstance(dtstart, icalendar.vDDDTypes):
             raise TypeError(f"DTSTART of {title} is not a vDDDTypes")
-
         if not isinstance(dtend, icalendar.vDDDTypes):
             raise TypeError(f"DTEND of {title} is not a vDDDTypes")
 
-        if dtstart.params.get("VALUE") == "DATE":
-            # is a full day event
-            start = vdd_to_datetime(dtstart.dt)  # type: ignore
-            end = vdd_to_datetime(dtend.dt)  # type: ignore
-            if start is None:
-                raise TypeError(f"DTSTART of {title} is not a date")
-            if end is None:
-                end = start + relativedelta(days=1)
-            self.events.append(
-                EventMD(start=start, end=end, title=title, allDay=True)
-            )
-        else:
-            if dtstart.params.get("VALUE") is not None:
-                raise TypeError(
-                    f"DTSTART of {title} is not a date or time"
-                )
-            start = cast(datetime.datetime, dtstart.dt)
-            end = cast(datetime.datetime, dtend.dt)
-            self.events.append(
-                EventMD(start=start, end=end, title=title, allDay=False)
-            )
+        start_dt = vdd_to_datetime(dtstart.dt)
+        end_dt = vdd_to_datetime(dtend.dt)
+        if start_dt is None:
+            raise TypeError(f"DTSTART of {title} is invalid")
 
+        all_day = isinstance(dtstart.dt, datetime.date)
+        if end_dt is None:
+            end_dt = start_dt + (relativedelta(days=1) if all_day else relativedelta(hours=1))
+
+        # Normalize both start and end times to the configured timezone
+        final_start = self._normalize_datetime(start_dt)
+        final_end = self._normalize_datetime(end_dt)
+
+        self.events.append(
+            DisplayEvent(start=final_start, end=final_end, title=title, all_day=all_day)
+        )
+        return self
+
+    def track_task(self, task: VikunjaTask) -> Self:
+        if not task.due_date:
+            return self
+
+        # Parse the ISO string, which will be timezone-aware (likely UTC)
+        due_aware = isoparse(task.due_date)
+        
+        # Convert the due date to the configured local timezone
+        due_local = due_aware.astimezone(self.tz)
+        
+        # Get the current time in the same timezone for an accurate comparison
+        now_local = datetime.datetime.now(self.tz)
+        
+        is_overdue = due_local < now_local
+
+        self.events.append(
+            DisplayEvent(
+                start=due_local,
+                end=due_local,
+                title=task.title,
+                all_day=False, # Tasks are treated as timed events
+                overdue=is_overdue
+            )
+        )
         return self
 
     def generate_markdown(self) -> str:
-        date_maps: dict[
-            datetime.date,
-            list[EventMD],
-        ] = {}
-        for event in self.events:
-            date = event.start.date()
+        overdue_tasks = sorted(
+            [e for e in self.events if e.overdue], key=lambda e: e.start
+        )
+        scheduled_events = [e for e in self.events if not e.overdue]
 
+        markdown = []
+
+        # Process Overdue Tasks
+        if overdue_tasks:
+            markdown.append(self.cfg.overdue_title)
+            for task in overdue_tasks:
+                due_str = task.start.strftime(f"{self.cfg.date_format} {self.cfg.time_format}")
+                markdown.append(f"*Due {due_str}*: {task.title}")
+            markdown.append("") # Add a blank line for separation
+
+        # Process Scheduled Events
+        date_maps: dict[datetime.date, list[DisplayEvent]] = {}
+        for event in scheduled_events:
+            date = event.start.date()
             if date not in date_maps:
                 date_maps[date] = []
             date_maps[date].append(event)
 
-        markdown = []
         for date, events in sorted(date_maps.items()):
             date_str = date.strftime(self.cfg.date_format)
-            all_day = [event for event in events if event.allDay]
-            timed = [event for event in events if not event.allDay]
-            timed.sort(key=lambda e: e.start)
+            all_day = [event for event in events if event.all_day]
+            timed = sorted([event for event in events if not event.all_day], key=lambda e: e.start)
 
             markdown.append(f"**{date_str}**")
             for event in all_day:
                 markdown.append(f"*All day*: {event.title}")
             for event in timed:
                 start = event.start.strftime(self.cfg.time_format)
-                end = event.end.strftime(self.cfg.time_format)
-                markdown.append(f"*{start} - {end}*: {event.title}")
+                # For tasks, start and end are the same
+                if event.start == event.end:
+                    markdown.append(f"*{start}*: {event.title}")
+                else:
+                    end = event.end.strftime(self.cfg.time_format)
+                    markdown.append(f"*{start} - {end}*: {event.title}")
             markdown.append("")
 
         return "\n".join(markdown)
 
-    def generate_dict(self) -> list[dict]:
-        return [
-            {
-                "title": event.title,
-                "start": event.start.isoformat(),
-                "end": event.end.isoformat(),
-                "allDay": event.allDay,
-            }
-            for event in self.events
-        ]
-
-    def generate_json(self) -> str:
-        return json.dumps(self.generate_dict(), indent=2)
-
     @override
-    def clear(self):
+    def clear(self) -> Self:
         self.events.clear()
+        return self
