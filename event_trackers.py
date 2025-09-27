@@ -86,13 +86,15 @@ class MDTracker(EventTracker):
         if start_dt is None:
             raise TypeError(f"DTSTART of {title} is invalid")
 
-        all_day = isinstance(dtstart.dt, datetime.date)
+        all_day = not isinstance(dtstart.dt, datetime.datetime)
         if end_dt is None:
             end_dt = start_dt + (relativedelta(days=1) if all_day else relativedelta(hours=1))
 
         # Normalize both start and end times to the configured timezone
         final_start = self._normalize_datetime(start_dt)
         final_end = self._normalize_datetime(end_dt)
+
+        print(title, final_start, final_end, all_day)
 
         self.events.append(
             DisplayEvent(start=final_start, end=final_end, title=title, all_day=all_day)
