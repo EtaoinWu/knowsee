@@ -17,6 +17,10 @@ calendar_groups:
     - type: vikunja
       name: "Vikunja Tasks"
 
+  Donetick:
+    - type: donetick
+      name: "Donetick Chores"
+
 crawler:
   date_range: [-2, +4] # [0, 7] if you want a week including today
   crawl_every: 300 # seconds
@@ -36,4 +40,7 @@ image_urls:
 vikunja:
   base_url: https://vikunja.instance.example.com
   api_token: tk_v529i3n4iuofby87235f7892387952v42837v
-  
+
+donetick:
+  base_url: https://donetick.instance.example.com
+  secret_key: your-donetick-secret-key

@@ -2,8 +2,9 @@
 
 import dataclasses
 from datetime import datetime
+from typing import Protocol
 
-from beartype import beartype
+from beartype import beartype, typing
 
 
 @beartype
@@ -16,7 +17,7 @@ class Calendar:
         color: str,
         icloud: bool | None = None,
     ):
-        if type not in ["ical", "vikunja"]:
+        if type not in ["ical", "vikunja", "donetick"]:
             raise ValueError(f"Unsupported calendar type: {type}")
         if type == "ical" and not url:
             raise ValueError("ical type requires a url")
@@ -58,6 +59,27 @@ class VikunjaTask:
             title=data.get("title", "Untitled Task"),
             due_date=data.get("due_date"),
         )
+
+
+@beartype
+@dataclasses.dataclass
+class DonetickTask:
+    title: str
+    due_date: str | None
+
+    @classmethod
+    def from_dict(cls, data: dict):
+        return cls(
+            title=data.get("name", "Untitled Task"),
+            due_date=data.get("nextDueDate"),
+        )
+
+
+@beartype
+@typing.runtime_checkable
+class TaskLike(Protocol):
+    title: str
+    due_date: str | None
 
 
 @beartype

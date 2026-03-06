@@ -14,7 +14,7 @@ from dateutil.parser import isoparse
 from dateutil.relativedelta import relativedelta
 
 from config import MarkdownFormatConfig
-from model import DisplayEvent, VikunjaTask
+from model import DisplayEvent, TaskLike
 
 EventType = icalendar.Event
 logger = logging.getLogger(__name__)
@@ -101,7 +101,7 @@ class MDTracker(EventTracker):
         )
         return self
 
-    def track_task(self, task: VikunjaTask) -> Self:
+    def track_task(self, task: TaskLike) -> Self:
         if not task.due_date:
             return self
 

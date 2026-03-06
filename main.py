@@ -20,7 +20,7 @@ from telegram.ext import (
 )
 
 from config import Config
-from crawler import Crawler, Downloader, VikunjaFetcher
+from crawler import Crawler, DonetickFetcher, Downloader, VikunjaFetcher
 from db import Database
 from event_trackers import MDTracker
 from image_dl import ImageDownloader
@@ -68,6 +68,7 @@ class BotManager:
         db: Database,
         crawler: Crawler,
         vikunja: VikunjaFetcher,
+        donetick: DonetickFetcher,
         idl: ImageDownloader,
         bg: BackgroundTaskManager | None = None,
     ):
@@ -78,6 +79,7 @@ class BotManager:
         self.db = db
         self.crawler = crawler
         self.vikunja = vikunja
+        self.donetick = donetick
         self.idl = idl
         self.bg = bg or BackgroundTaskManager()
 
@@ -149,6 +151,7 @@ class BotManager:
         all_calendars = await self.db.get_calendars_for_chat(chat_id)
         ical_calendars = [cal for cal in all_calendars if cal.type == 'ical']
         has_vikunja_source = any(cal.type == 'vikunja' for cal in all_calendars)
+        has_donetick_source = any(cal.type == 'donetick' for cal in all_calendars)
 
         if ical_calendars:
             async for event in self.crawler.process_calendars(ical_calendars):
@@ -158,6 +161,15 @@ class BotManager:
             logger.info(f"Vikunja source enabled for chat {chat_id}, fetching tasks.")
             days_forward = self.crawler.config.date_range[1]
             tasks = await self.vikunja.fetch_tasks(days_forward)
+            for task in tasks:
+                tracker.track_task(task)
+
+        if has_donetick_source:
+            logger.info(
+                f"Donetick source enabled for chat {chat_id}, fetching tasks."
+            )
+            days_forward = self.crawler.config.date_range[1]
+            tasks = await self.donetick.fetch_tasks(days_forward)
             for task in tasks:
                 tracker.track_task(task)
 
@@ -389,11 +401,19 @@ async def main():
     downloader = Downloader()
     crawler = Crawler(config.crawler, downloader)
     vikunja = VikunjaFetcher(config.vikunja, downloader)
+    donetick = DonetickFetcher(config.donetick, downloader)
     idl = ImageDownloader(
         config.image_urls, tcp_config={"verify_ssl": False}
     )
 
-    telegram = BotManager(config, db, crawler, vikunja, idl)
+    telegram = BotManager(
+        config,
+        db,
+        crawler,
+        vikunja,
+        donetick,
+        idl,
+    )
     telegram.prepare()
 
     stop_event = asyncio.Event()

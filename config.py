@@ -39,6 +39,19 @@ class VikunjaConfig:
 
 @beartype
 @dataclasses.dataclass
+class DonetickConfig:
+    base_url: str
+    secret_key: str
+
+    @classmethod
+    def from_dict(cls, data: dict):
+        base_url = data.get("base_url", "")
+        secret_key = data.get("secret_key", "")
+        return cls(base_url=base_url, secret_key=secret_key)
+
+
+@beartype
+@dataclasses.dataclass
 class TelegramConfig:
     api_token: str
     chat_ids: list[str | int]
@@ -79,6 +92,7 @@ class Config:
     crawler: CrawlerConfig
     telegram: TelegramConfig
     vikunja: VikunjaConfig
+    donetick: DonetickConfig
     image_urls: dict[str, str] = dataclasses.field(default_factory=dict)
 
     @classmethod
@@ -103,6 +117,7 @@ class Config:
             )
         telegram = TelegramConfig.from_dict(data.get("telegram", {}))
         vikunja = VikunjaConfig.from_dict(data.get("vikunja", {}))
+        donetick = DonetickConfig.from_dict(data.get("donetick", {}))
 
         return cls(
             locale=locale,
@@ -112,6 +127,7 @@ class Config:
             crawler=crawler,
             telegram=telegram,
             vikunja=vikunja,
+            donetick=donetick,
             image_urls=image_urls,
         )
 

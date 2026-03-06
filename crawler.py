@@ -8,10 +8,11 @@ import aiohttp
 import icalendar
 import recurring_ical_events
 from beartype import beartype
+from dateutil.parser import isoparse
 from dateutil.relativedelta import relativedelta
 
-from config import CrawlerConfig, VikunjaConfig
-from model import Calendar, VikunjaTask
+from config import CrawlerConfig, DonetickConfig, VikunjaConfig
+from model import Calendar, DonetickTask, VikunjaTask
 
 # Set up module-level logger
 logger = logging.getLogger(__name__)
@@ -44,12 +45,25 @@ class Downloader:
 
             return content
             
-    async def fetch_json(self, url: str, headers: dict = {}, params: dict = {}) -> list[dict]:
+    async def fetch_json(
+        self,
+        url: str,
+        headers: dict | None = None,
+        params: dict | None = None,
+        source_name: str = "JSON API",
+    ) -> list[dict]:
+        headers = headers or {}
+        params = params or {}
         async with self.session.get(url, headers=headers, params=params) as response:
             if response.status != 200:
                 text = await response.text()
-                logger.error(f"Failed to fetch Vikunja tasks. Status: {response.status}, Body: {text}")
-                raise ConnectionError("Failed to fetch Vikunja tasks")
+                logger.error(
+                    "Failed to fetch %s. Status: %s, Body: %s",
+                    source_name,
+                    response.status,
+                    text,
+                )
+                raise ConnectionError(f"Failed to fetch {source_name}")
             return await response.json()
 
     async def close(self):
@@ -72,11 +86,71 @@ class VikunjaFetcher:
         params = {"filter": filter_query}
 
         try:
-            tasks_data = await self.downloader.fetch_json(url, headers, params)
+            tasks_data = await self.downloader.fetch_json(
+                url,
+                headers=headers,
+                params=params,
+                source_name="Vikunja tasks",
+            )
             return [VikunjaTask.from_dict(task) for task in tasks_data]
         except Exception as e:
             logger.error(f"Error fetching Vikunja tasks: {e}")
             return []
+
+
+@beartype
+class DonetickFetcher:
+    def __init__(self, config: DonetickConfig, downloader: Downloader):
+        self.config = config
+        self.downloader = downloader
+
+    async def fetch_tasks(self, days_forward: int) -> list[DonetickTask]:
+        url = f"{self.config.base_url}/eapi/v1/chore"
+        headers = {"secretkey": self.config.secret_key}
+
+        try:
+            chores_data = await self.downloader.fetch_json(
+                url,
+                headers=headers,
+                source_name="Donetick chores",
+            )
+        except Exception as e:
+            logger.error(f"Error fetching Donetick chores: {e}")
+            return []
+
+        cutoff = datetime.datetime.now(
+            datetime.UTC
+        ) + relativedelta(days=days_forward)
+        tasks: list[DonetickTask] = []
+
+        for chore in chores_data:
+            if not chore.get("isActive", True):
+                continue
+
+            status = chore.get("status")
+            if status is not None and status != 0:
+                continue
+
+            task = DonetickTask.from_dict(chore)
+            if not task.due_date:
+                continue
+
+            try:
+                due_dt = isoparse(task.due_date)
+            except ValueError:
+                logger.warning(
+                    "Skipping Donetick task with invalid due date: %s",
+                    task.title,
+                )
+                continue
+
+            if due_dt.tzinfo is None:
+                due_dt = due_dt.replace(tzinfo=datetime.UTC)
+
+            if due_dt <= cutoff:
+                tasks.append(task)
+
+        return tasks
 
 
 @beartype

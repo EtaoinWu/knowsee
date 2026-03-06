@@ -39,7 +39,7 @@ class Database:
         CREATE TABLE IF NOT EXISTS calendars (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             chat_id INTEGER NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
-            type TEXT NOT NULL CHECK(type IN ('ical', 'vikunja')),
+            type TEXT NOT NULL,
             url TEXT,
             icloud BOOLEAN NOT NULL DEFAULT 0,
             name TEXT NOT NULL,
@@ -47,7 +47,45 @@ class Database:
             UNIQUE(chat_id, name)
         );
         """)
+        await self._migrate_calendars_type_constraint()
         await conn.commit()
+
+    async def _migrate_calendars_type_constraint(self):
+        conn = safe_must(self.conn, "database connection")
+        cursor = await conn.execute(
+            """
+            SELECT sql FROM sqlite_master
+            WHERE type = 'table' AND name = 'calendars'
+            """
+        )
+        row = await cursor.fetchone()
+        await cursor.close()
+        if not row or not row[0]:
+            return
+
+        table_sql: str = row[0]
+        if "CHECK(type IN ('ical', 'vikunja'))" not in table_sql:
+            return
+
+        await conn.executescript("""
+        DROP TABLE IF EXISTS calendars_new;
+        CREATE TABLE calendars_new (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            chat_id INTEGER NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+            type TEXT NOT NULL,
+            url TEXT,
+            icloud BOOLEAN NOT NULL DEFAULT 0,
+            name TEXT NOT NULL,
+            color TEXT,
+            UNIQUE(chat_id, name)
+        );
+
+        INSERT INTO calendars_new (id, chat_id, type, url, icloud, name, color)
+        SELECT id, chat_id, type, url, icloud, name, color FROM calendars;
+
+        DROP TABLE calendars;
+        ALTER TABLE calendars_new RENAME TO calendars;
+        """)
 
     async def touch_chat(self, chat_id: int) -> None:
         conn = safe_must(self.conn, "database connection")
